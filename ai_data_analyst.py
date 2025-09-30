@@ -4,9 +4,99 @@ import csv
 import streamlit as st
 import pandas as pd
 from phi.model.openai import OpenAIChat
+from phi.model.google import Gemini
 from phi.agent.duckdb import DuckDbAgent
 from agno.tools.pandas import PandasTools
 import re
+import google.generativeai as genai
+
+import os
+import re
+import sys
+import io
+import contextlib
+import warnings
+from typing import Optional, List, Any, Tuple
+from PIL import Image
+import streamlit as st
+import pandas as pd
+import base64
+from io import BytesIO
+from together import Together
+from e2b_code_interpreter import Sandbox
+
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+
+pattern = re.compile(r"```python\n(.*?)\n```", re.DOTALL)
+
+def code_interpret(e2b_code_interpreter: Sandbox, code: str) -> Optional[List[Any]]:
+    with st.spinner('Executing code in E2B sandbox...'):
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                exec = e2b_code_interpreter.run_code(code)
+
+        if stderr_capture.getvalue():
+            print("[Code Interpreter Warnings/Errors]", file=sys.stderr)
+            print(stderr_capture.getvalue(), file=sys.stderr)
+
+        if stdout_capture.getvalue():
+            print("[Code Interpreter Output]", file=sys.stdout)
+            print(stdout_capture.getvalue(), file=sys.stdout)
+
+        if exec.error:
+            print(f"[Code Interpreter ERROR] {exec.error}", file=sys.stderr)
+            return None
+        return exec.results
+
+def match_code_blocks(llm_response: str) -> str:
+    match = pattern.search(llm_response)
+    if match:
+        code = match.group(1)
+        return code
+    return ""
+
+def chat_with_llm(e2b_code_interpreter: Sandbox, user_message: str, dataset_path: str) -> Tuple[Optional[List[Any]], str]:
+    # Update system prompt to include dataset path information
+    system_prompt = f"""You're a Python data scientist and data visualization expert. You are given a dataset at path '{dataset_path}' and also the user's query.
+You need to analyze the dataset and answer the user's query with a response and you run Python code to solve them.
+IMPORTANT: Always use the dataset path variable '{dataset_path}' in your code when reading the CSV file."""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    with st.spinner('Getting response from Together AI LLM model...'):
+        client = Together(api_key=st.session_state.together_api_key)
+        response = client.chat.completions.create(
+            model=st.session_state.model_name,
+            messages=messages,
+        )
+
+        response_message = response.choices[0].message
+        python_code = match_code_blocks(response_message.content)
+        
+        if python_code:
+            code_interpreter_results = code_interpret(e2b_code_interpreter, python_code)
+            return code_interpreter_results, response_message.content
+        else:
+            st.warning(f"Failed to match any Python code in model's response")
+            return None, response_message.content
+
+def upload_dataset(code_interpreter: Sandbox, uploaded_file) -> str:
+    dataset_path = f"./{uploaded_file.name}"
+    
+    try:
+        code_interpreter.files.write(dataset_path, uploaded_file)
+        return dataset_path
+    except Exception as error:
+        st.error(f"Error during file upload: {error}")
+        raise error
+
 
 # Function to preprocess and save the uploaded file
 def preprocess_and_save(file):
@@ -52,25 +142,26 @@ st.title("📊 Data Analyst Agent")
 # Sidebar for API keys and model selection
 with st.sidebar:
     st.header("Configuration")
-    openai_key = st.text_input("Enter your OpenAI API key:", type="password")
-    if openai_key:
-        st.session_state.openai_key = openai_key
+    google_key = st.text_input("Enter your Google Gemini API key:", type="password")
+    if google_key:
+        st.session_state.google_key = google_key
         st.success("API key saved!")
     else:
-        st.warning("Please enter your OpenAI API key to proceed.")
-    
+        st.warning("Please enter your Google Gemini API key to proceed.")
+    st.session_state.google_key = google_key
     # Model selection
     model_choice = st.selectbox(
-        "Select OpenAI Model:",
-        ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-        help="Choose the OpenAI model to use. gpt-4o-mini is faster and cheaper."
+        "Select Gemini Model:",
+        ["gemini-1.5-pro", "gemini-1.5-flash"],
+        help="Choose the Gemini model to use."
     )
+    genai.configure(api_key=st.session_state.google_key)
     st.session_state.selected_model = model_choice
 
 # File upload widget
 uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
-if uploaded_file is not None and "openai_key" in st.session_state:
+if uploaded_file is not None and "google_key" in st.session_state and st.session_state.google_key:
     # Preprocess and save the uploaded file
     temp_path, columns, df = preprocess_and_save(uploaded_file)
     
@@ -103,8 +194,13 @@ if uploaded_file is not None and "openai_key" in st.session_state:
         )
         
         # Set the model and tools for the agent
-        selected_model = st.session_state.get("selected_model", "gpt-4o")
-        duckdb_agent.model = OpenAIChat(id=selected_model, api_key=st.session_state.openai_key)
+        selected_model = st.session_state.get("selected_model", "gemini-1.5-pro")
+        
+        # Use the phi framework's Gemini wrapper
+        duckdb_agent.model = Gemini(
+            model=selected_model, 
+            api_key=st.session_state.google_key
+        )
         duckdb_agent.tools = [PandasTools()]
         duckdb_agent.system_prompt = "You are an expert data analyst. Generate SQL queries to solve the user's query. Return only the SQL query, enclosed in ```sql ``` and give the final answer."
         
