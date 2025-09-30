@@ -6,3 +6,4 @@ pandas
 numpy>=2.3.3
 agno
 openpyxl
+google-generativeai
