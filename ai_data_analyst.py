@@ -9,7 +9,8 @@ from phi.agent.duckdb import DuckDbAgent
 from agno.tools.pandas import PandasTools
 import re
 import google.generativeai as genai
-
+from e2b_code_interpreter import Sandbox
+from streamlit_mic_recorder import speech_to_text
 # Function to preprocess and save the uploaded file
 def preprocess_and_save(file):
     try:
@@ -64,9 +65,15 @@ with st.sidebar:
     # Model selection
     model_choice = st.selectbox(
         "Select Gemini Model:",
-        ["gemini-1.5-pro", "gemini-1.5-flash"],
-        help="Choose the Gemini model to use."
-    )
+        
+            ["Gemini 2.5 Pro",
+            "Gemini 2.5 Flash",
+            "Gemini 2.5 Flash Lite",
+            "Gemini 2.0 Flash 001",
+            "Gemini 2.0 Flash Lite 001",
+    ],
+    help="Choose the Gemini model to use."
+)
     genai.configure(api_key=st.session_state.google_key)
     st.session_state.selected_model = model_choice
 
@@ -114,7 +121,7 @@ if uploaded_file is not None and "google_key" in st.session_state and st.session
             api_key=st.session_state.google_key
         )
         duckdb_agent.tools = [PandasTools()]
-        duckdb_agent.system_prompt = "You are an expert data analyst. Generate SQL queries to solve the user's query. Return only the SQL query, enclosed in ```sql ``` and give the final answer."
+        duckdb_agent.system_prompt = "You are an expert data analyst. Identify which chart or graph is the best way to solve the user's query. Return only the chart or graph, and give a consultant like insight from the data."
         
         # Initialize code storage in session state
         if "generated_code" not in st.session_state:

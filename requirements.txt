@@ -7,3 +7,5 @@ numpy>=2.3.3
 agno
 openpyxl
 google-generativeai
+e2b_code_interpreter
+streamlit_mic_recorder
